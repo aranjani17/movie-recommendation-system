@@ -6,7 +6,7 @@ import streamlit as st
 from src.data_preprocessing import merge_data
 from src.model import build_model
 from src.recommend import recommend_movies
-from src.tmdb import get_movie_info
+from src.tmdb import get_movie_info, get_movies_info_bulk
 
 # ── Page config ──────────────────────────────────────────────
 st.set_page_config(
@@ -15,7 +15,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# ── Custom CSS (Netflix-dark luxury theme) ────────────────────
+# ── CSS ──────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500&display=swap');
@@ -25,10 +25,8 @@ html, body, [class*="css"] {
     color: #f0eee8 !important;
     font-family: 'DM Sans', sans-serif !important;
 }
-
 .main { background-color: #0a0a0f !important; padding: 0 2rem; }
 
-/* Hero header */
 .hero {
     text-align: center;
     padding: 3rem 0 2rem;
@@ -52,7 +50,6 @@ html, body, [class*="css"] {
     margin-top: 0.5rem;
 }
 
-/* Selected movie card */
 .selected-card {
     display: flex;
     gap: 2rem;
@@ -78,8 +75,16 @@ html, body, [class*="css"] {
     margin: 0 0 0.5rem;
     letter-spacing: 2px;
 }
-.selected-card .meta { color: #8882a4; font-size: 0.85rem; margin-bottom: 0.75rem; }
-.selected-card .overview { color: #ccc9e0; font-size: 0.92rem; line-height: 1.6; }
+.selected-card .meta {
+    color: #8882a4;
+    font-size: 0.85rem;
+    margin-bottom: 0.75rem;
+}
+.selected-card .overview {
+    color: #ccc9e0;
+    font-size: 0.92rem;
+    line-height: 1.6;
+}
 .rating-badge {
     display: inline-block;
     background: #e8c96d;
@@ -91,7 +96,6 @@ html, body, [class*="css"] {
     margin-bottom: 0.75rem;
 }
 
-/* Recommendation grid */
 .section-title {
     font-family: 'Bebas Neue', sans-serif;
     font-size: 1.8rem;
@@ -107,8 +111,8 @@ html, body, [class*="css"] {
     border: 1px solid #1e1e2e;
     border-radius: 12px;
     overflow: hidden;
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
     margin-bottom: 1rem;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 .movie-card:hover {
     transform: translateY(-4px);
@@ -138,18 +142,15 @@ html, body, [class*="css"] {
     line-height: 1.3;
     min-height: 2.5rem;
 }
-.movie-card .card-meta { color: #8882a4; font-size: 0.78rem; }
-.stars { color: #e8c96d; font-size: 0.85rem; }
+.movie-card .card-meta { color: #8882a4; font-size: 0.78rem; margin-top: 2px; }
+.stars { color: #e8c96d; font-size: 0.85rem; margin-bottom: 2px; }
 
-/* Selectbox styling */
 .stSelectbox > div > div {
     background-color: #12111a !important;
     border: 1px solid #2a2840 !important;
     color: #f0eee8 !important;
     border-radius: 8px !important;
 }
-
-/* Button */
 .stButton > button {
     background: linear-gradient(135deg, #e8c96d, #c9a84c) !important;
     color: #0a0a0f !important;
@@ -159,20 +160,15 @@ html, body, [class*="css"] {
     font-size: 1rem !important;
     letter-spacing: 1px !important;
     padding: 0.6rem 2rem !important;
-    transition: opacity 0.2s !important;
     width: 100% !important;
 }
 .stButton > button:hover { opacity: 0.85 !important; }
-
-/* Spinner */
-.stSpinner > div { border-top-color: #e8c96d !important; }
-
-/* Hide streamlit branding */
+.stProgress > div > div { background-color: #e8c96d !important; }
 #MainMenu, footer, header { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Hero Header ───────────────────────────────────────────────
+# ── Hero ─────────────────────────────────────────────────────
 st.markdown("""
 <div class="hero">
     <h1>🎬 CineMatch</h1>
@@ -180,33 +176,57 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ── Load data ────────────────────────────────────────────────
-@st.cache_data(show_spinner=False)
+# ── Load data — stored in memory for entire session ──────────
+@st.cache_resource(show_spinner=False)
 def load():
     data = merge_data()
     popular = build_model(data)
-    return data, popular
+    data = data[['userId', 'movieId', 'rating', 'title', 'genres']]
+    movie_list = sorted(data['title'].unique().tolist())
+    return data, popular, movie_list
 
-with st.spinner("Loading cinema database..."):
-    data, popular_movies = load()
+# Show progress bar only on very first load
+if 'loaded' not in st.session_state:
+    bar = st.progress(0, text="🎬 Loading cinema database...")
+    data, popular_movies, movie_list = load()
+    bar.progress(100, text="✅ Ready!")
+    bar.empty()
+    st.session_state['loaded'] = True
+else:
+    data, popular_movies, movie_list = load()
 
-movie_list = sorted(data['title'].unique().tolist())
+# ── TMDB cache per title ─────────────────────────────────────
+@st.cache_data(show_spinner=False)
+def fetch_info(title):
+    return get_movie_info(title)
 
-# ── Search UI ────────────────────────────────────────────────
+@st.cache_data(show_spinner=False)
+def fetch_bulk(titles_tuple):
+    return get_movies_info_bulk(list(titles_tuple))
+
+# ── Search bar ───────────────────────────────────────────────
 col1, col2 = st.columns([4, 1])
 with col1:
-    selected_movie = st.selectbox("🎥 Search a movie you like", movie_list, label_visibility="collapsed")
+    selected_movie = st.selectbox(
+        "Search a movie you like",
+        movie_list,
+        label_visibility="collapsed"
+    )
 with col2:
     recommend_btn = st.button("Find Similar →")
 
-# ── Selected movie info ──────────────────────────────────────
+# ── Selected movie info card ─────────────────────────────────
 if selected_movie:
-    info = get_movie_info(selected_movie)
+    info = fetch_info(selected_movie)
     avg_r = popular_movies[popular_movies['title'] == selected_movie]['avg_rating']
     user_rating = f"{avg_r.values[0]:.1f} / 5.0" if not avg_r.empty else "N/A"
-    stars = "★" * int(round(avg_r.values[0])) + "☆" * (5 - int(round(avg_r.values[0]))) if not avg_r.empty else ""
 
-    poster_html = f'<img src="{info["poster"]}" alt="poster"/>' if info["poster"] else '<div style="width:140px;height:210px;background:#1a1828;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:3rem;">🎬</div>'
+    poster_html = (
+        f'<img src="{info["poster"]}" alt="poster"/>'
+        if info["poster"] else
+        '<div style="width:140px;height:210px;background:#1a1828;border-radius:10px;'
+        'display:flex;align-items:center;justify-content:center;font-size:3rem;">🎬</div>'
+    )
 
     st.markdown(f"""
     <div class="selected-card">
@@ -215,29 +235,40 @@ if selected_movie:
             <h2>{selected_movie}</h2>
             <div class="meta">📅 {info['year']} &nbsp;|&nbsp; ⭐ TMDB: {info['tmdb_rating']}/10</div>
             <div class="rating-badge">★ User Rating: {user_rating}</div>
-            <div class="overview">{info['overview'][:300]}{'...' if len(info['overview']) > 300 else ''}</div>
+            <div class="overview">
+                {info['overview'][:300]}{'...' if len(info['overview']) > 300 else ''}
+            </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-# ── Recommendations ──────────────────────────────────────────
+# ── Recommendation grid ──────────────────────────────────────
 if recommend_btn:
-    with st.spinner("Finding similar movies..."):
-        results = recommend_movies(selected_movie, data, popular_movies)
+    results = recommend_movies(selected_movie, data, popular_movies)
+
+    with st.spinner("Fetching posters..."):
+        all_info = fetch_bulk(tuple(results))
 
     st.markdown('<div class="section-title">RECOMMENDED FOR YOU</div>', unsafe_allow_html=True)
 
     cols = st.columns(6)
     for i, movie in enumerate(results):
-        info = get_movie_info(movie)
+        info = all_info.get(movie, {"poster": None, "tmdb_rating": 0, "year": ""})
+
         avg_r = popular_movies[popular_movies['title'] == movie]['avg_rating']
         rating = f"{avg_r.values[0]:.1f}" if not avg_r.empty else "N/A"
+
         num_r = popular_movies[popular_movies['title'] == movie]['num_ratings']
         count = f"{int(num_r.values[0])}" if not num_r.empty else ""
 
-        poster_html = f'<img src="{info["poster"]}" alt="{movie}"/>' if info["poster"] else '<div class="no-poster">🎬</div>'
         stars_count = int(round(avg_r.values[0])) if not avg_r.empty else 0
         stars_html = "★" * stars_count + "☆" * (5 - stars_count)
+
+        poster_html = (
+            f'<img src="{info["poster"]}" alt="{movie}"/>'
+            if info.get("poster") else
+            '<div class="no-poster">🎬</div>'
+        )
 
         with cols[i % 6]:
             st.markdown(f"""
@@ -246,7 +277,7 @@ if recommend_btn:
                 <div class="card-body">
                     <div class="card-title">{movie}</div>
                     <div class="stars">{stars_html}</div>
-                    <div class="card-meta">⭐ {rating}/5 &nbsp;·&nbsp; {count} ratings</div>
+                    <div class="card-meta">⭐ {rating}/5 · {count} ratings</div>
                     <div class="card-meta">🎬 TMDB: {info['tmdb_rating']}/10</div>
                 </div>
             </div>
